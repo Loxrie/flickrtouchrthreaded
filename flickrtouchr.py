@@ -1,17 +1,21 @@
 #!/usr/bin/env python
 
 #
-# FlickrTouchr - a simple python script to grab all your photos from flickr, 
-#                dump into a directory - organised into folders by set - 
-#                along with any favourites you have saved.
+# FlickrTouchrThreaded - a simple python script to grab all your photos from flickr, 
+#                        dump into a directory - organised into folders by set - 
+#                        along with any favourites you have saved.
+#                        Can download images using concurrent threads
+#                        Based on Dan Benjamins FlickrTouchr.
 #
 #                You can then sync the photos to an iPod touch.
 #
-# Version:       1.2
+# Version:       0.1
 #
-# Original Author:	colm - AT - allcosts.net  - Colm MacCarthaigh - 2008-01-21
-#
+# Original Author of FlickrTouchr:	colm - AT - allcosts.net  - Colm MacCarthaigh - 2008-01-21
 # Modified by:			Dan Benjamin - http://hivelogic.com										
+#
+# Converted to threaded operation by: Boaz Arad - http://www.boazarad.com
+#                                                 http://www.machine-readable.blogspot.com/2011/01/flickrtouchrthreaded-download-all-your.html
 #
 # License:       		Apache 2.0 - http://www.apache.org/licenses/LICENSE-2.0.html
 #
@@ -25,9 +29,72 @@ import cPickle
 import md5
 import sys
 import os
+from threading import Thread
+from threading import BoundedSemaphore
 
 API_KEY       = "e224418b91b4af4e8cdb0564716fa9bd"
 SHARED_SECRET = "7cddb9c9716501a0"
+
+
+#
+# Experimental Thread test
+#
+class grabphotothread(Thread):
+	global threadpool
+	def __init__(self,id, token, filename, tid, text):
+		Thread.__init__(self)
+		self.id = id
+		self.token = token
+		self.filename = filename
+		self.name = "Thread #"+str(tid)
+		self.num = int(tid)
+		self.text = text
+	def run(self):
+		try:
+			# Contruct a request to find the sizes
+			print self.name + " trying to download "+self.text
+			url  = "http://api.flickr.com/services/rest/?method=flickr.photos.getSizes"
+			url += "&photo_id=" + self.id
+		
+			# Sign the request
+			url = flickrsign(url, self.token)
+		
+			# Make the request
+			response = urllib2.urlopen(url)
+			
+			# Parse the XML
+			dom = xml.dom.minidom.parse(response)
+
+			# Get the list of sizes
+			sizes =  dom.getElementsByTagName("size")
+
+			# Grab the original if it exists
+			if (sizes[-1].getAttribute("label") == "Original"):
+			  imgurl = sizes[-1].getAttribute("source")
+			else:
+			  print "Failed to get original for photo id " + self.id
+
+
+			# Free the DOM memory
+			dom.unlink()
+
+			# Grab the image file
+			response = urllib2.urlopen(imgurl)
+			data = response.read()
+		
+			# Save the file!
+			fh = open(self.filename, "w")
+			fh.write(data)
+			fh.close()
+			
+			global inodes
+			inodes[self.id] = self.filename
+			print self.name + " downloaded "+self.text +" to "+ self.filename
+			threadpool.release()
+		except:
+			print self.name + " failed to downloaded "+self.text
+			threadpool.release()
+
 
 #
 # Utility functions for dealing with flickr authentication
@@ -151,57 +218,29 @@ def flickrsign(url, token):
     return url
 
 #
-# Grab the photo from the server
+# Grab the photo from the server using threads
 #
-def getphoto(id, token, filename):
-    try:
-        # Contruct a request to find the sizes
-        url  = "http://api.flickr.com/services/rest/?method=flickr.photos.getSizes"
-        url += "&photo_id=" + id
-    
-        # Sign the request
-        url = flickrsign(url, token)
-    
-        # Make the request
-        response = urllib2.urlopen(url)
-        
-        # Parse the XML
-        dom = xml.dom.minidom.parse(response)
-
-        # Get the list of sizes
-        sizes =  dom.getElementsByTagName("size")
-
-        # Grab the original if it exists
-        if (sizes[-1].getAttribute("label") == "Original"):
-          imgurl = sizes[-1].getAttribute("source")
-        else:
-          print "Failed to get original for photo id " + id
+def getphoto(id, token, filename, text):
+	global threadpool
+	global threads
+	#print str(threads) +" out of " +str(maxthreads)
+	#print "now running " + str(threads) + " threads"
+	threadpool.acquire()
+	if (threads>=maxthreads):
+		threads=0
+	threads+=1
+	thread = grabphotothread(id, token, filename, threads, text)
+	thread.start()
 
 
-        # Free the DOM memory
-        dom.unlink()
-
-        # Grab the image file
-        response = urllib2.urlopen(imgurl)
-        data = response.read()
-    
-        # Save the file!
-        fh = open(filename, "w")
-        fh.write(data)
-        fh.close()
-
-        return filename
-    except:
-        print "Failed to retrieve photo id " + id
-    
-######## Main Application ##########
 if __name__ == '__main__':
 
     # The first, and only argument needs to be a directory
     try:
         os.chdir(sys.argv[1])
+        maxthreads = int(sys.argv[2])
     except:
-        print "usage: %s directory" % sys.argv[0] 
+        print "usage: %s [directory] [threads]" % sys.argv[0] 
         sys.exit(1)
 
     # First things first, see if we have a cached user and auth-token
@@ -220,7 +259,10 @@ if __name__ == '__main__':
         cPickle.dump(config, cache)
         cache.close()
 
-    # Now, construct a query for the list of photo sets
+    #set up the thread pool
+    threadpool = BoundedSemaphore(value=maxthreads)
+    threads = 0
+	# Now, construct a query for the list of photo sets
     url  = "http://api.flickr.com/services/rest/?method=flickr.photosets.getList"
     url += "&user_id=" + config["user"]
     url  = flickrsign(url, config["token"])
@@ -260,6 +302,7 @@ if __name__ == '__main__':
     urls.append( (url, "Favourites") )
 
     # Time to get the photos
+    print "Starting download with a "+str(maxthreads)+" thread pool"
     inodes = {}
     for (url , dir) in urls:
         # Create the directory
@@ -290,7 +333,8 @@ if __name__ == '__main__':
             # Grab the photos
             for photo in dom.getElementsByTagName("photo"):
                 # Tell the user we're grabbing the file
-                print photo.getAttribute("title").encode("utf8") + " ... in set ... " + dir
+                currphototext = "'"+photo.getAttribute("title").encode("utf8") + "' in set '" + dir+"'"
+                currphototext = currphototext.decode('utf8', 'ignore')
 
                 # Grab the id
                 photoid = photo.getAttribute("id")
@@ -301,14 +345,17 @@ if __name__ == '__main__':
                 # Skip files that exist
                 if os.access(target, os.R_OK):
                     inodes[photoid] = target
+                    print "Already got " + currphototext + " ("+target+"), skipping"
                     continue
                 
                 # Look it up in our dictionary of inodes first
                 if photoid in inodes and inodes[photoid] and os.access(inodes[photoid], os.R_OK):
                     # woo, we have it already, use a hard-link
+                    print "Already got " + currphototext + " ("+target+"), creating hard link"
                     os.link(inodes[photoid], target)
                 else:
-                    inodes[photoid] = getphoto(photo.getAttribute("id"), config["token"], target)
+                    #inodes[photoid] = getphoto(photo.getAttribute("id"), config["token"], target)
+					getphoto(photo.getAttribute("id"), config["token"], target, currphototext)
 
             # Move on the next page
             page = page + 1
