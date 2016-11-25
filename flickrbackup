@@ -178,7 +178,7 @@ def getphoto(id, token, filename):
         sizes =  dom.getElementsByTagName("size")
 
         # Grab the original if it exists
-        if (sizes[-1].getAttribute("label") == "Original"):
+        if (sizes[-1].getAttribute("label").endswith("Original")):
           imgurl = sizes[-1].getAttribute("source")
         else:
           print "Failed to get original for photo id " + id
@@ -226,9 +226,10 @@ def getmetadata(id, token):
         tags = getText(dom.getElementsByTagName("tags")[0].childNodes)
         urls = getText(dom.getElementsByTagName("urls")[0].childNodes)
         taken = dom.getElementsByTagName("dates")[0].getAttribute("taken")
+        media = dom.getElementsByTagName("photo")[0].getAttribute("media")
 
-        metadata = {'title' : title, 'desc' : description, 'tags' : tags, 'urls' : urls, 'taken' : taken}
-        # print metadata
+        metadata = {'title' : title, 'desc' : description, 'tags' : tags, 'urls' : urls, 'taken' : taken, 'media' : media}
+        #print metadata
 
         # Free the DOM memory
         dom.unlink()
@@ -412,7 +413,11 @@ if __name__ == '__main__':
                 date = metadata["taken"].split()[0]
 
                 # The target
-                target = dir + "/" + date + "/" + photo.getAttribute("title").encode("utf8")  + ".jpg"
+                target = dir + "/" + date + "/" + photo.getAttribute("title").encode("utf8")
+                if metadata["media"] == "photo":
+                    target += ".jpg"
+                else:
+                    target += ".mp4"
 
                 try:
                     os.makedirs(dir + "/" + date)
