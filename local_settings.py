@@ -1,2 +1,0 @@
-API_KEY       = "5c94226d43774e47e67b0b8578a95a40"
-SHARED_SECRET = "dfbd14bafe4e8f06"
